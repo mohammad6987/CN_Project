@@ -4,27 +4,36 @@ import java.io.*;
 import java.net.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.locks.*;
 
 public class Tracker {
-    private static final int TRACKER_PORT = 6881;
-    private static final int TCP_PORT = 6882;
+    private static final int UDP_PEER_TO_TRACKER = 6881;
+    private static final int TCP_PORT_FOR_OTHER_TRACKERS = 6882;
     private static final int BUFFER_SIZE = 1024;
     private static final int TIMEOUT_MS = 300_000;
-    private final Map<String, PeerInfo> peers;
-    private final List<String> otherTrackers;
+    private static final int PEER_CHECK_INTERVAL_MS = 60000;
+    private  Map<String, PeerInfo> peers = new ConcurrentHashMap<>();
+    private  List<String> otherTrackers;
+    private  ReadWriteLock peerLock = new ReentrantReadWriteLock();
+    private  Lock trackerLock = new ReentrantLock();
 
     public class PeerInfo {
         private final InetAddress ip;
         private final int port;
-        private final long loginTime;
+        private volatile long lastSeen;
         private final Set<String> sharedFiles;
-
-        public PeerInfo(InetAddress ip, int port, Set<String> sharedFiles) {
+    
+        public PeerInfo(InetAddress ip, int port) {
             this.ip = ip;
             this.port = port;
-            this.loginTime = System.currentTimeMillis();
-            this.sharedFiles = sharedFiles;
+            this.lastSeen = System.currentTimeMillis();
+            this.sharedFiles = ConcurrentHashMap.newKeySet();
         }
+    
+        public void updateLastSeen() {
+            this.lastSeen = System.currentTimeMillis();
+        }
+            // Getters and existing methods...
 
         public InetAddress getIp() {
             return ip;
@@ -34,22 +43,17 @@ public class Tracker {
             return port;
         }
 
-        public long getLoginTime() {
-            return loginTime;
+        public long getLastSeen() {
+            return lastSeen;
         }
 
         public Set<String> getSharedFiles() {
             return sharedFiles;
         }
-
-        @Override
-        public String toString() {
-            return ip.getHostAddress() + ":" + port + " (Files: " + sharedFiles + ")";
-        }
     }
 
     public Tracker() {
-        this.peers = new ConcurrentHashMap<>();
+        this.peers = new ConcurrentSkipListMap<>();
         this.otherTrackers = new CopyOnWriteArrayList<>();
     }
 
@@ -59,13 +63,16 @@ public class Tracker {
     }
 
     private void start() {
-        ExecutorService executor = Executors.newFixedThreadPool(2);
+        System.out.println("tracker stated!");
+        ExecutorService executor = Executors.newFixedThreadPool(3);
         executor.execute(this::listenForTrackers);
         executor.execute(this::listenForPeers);
+        executor.execute(this::checkPeerHealth);
+        System.out.println("all services are functional!");
     }
 
     private void listenForTrackers() {
-        try (ServerSocket serverSocket = new ServerSocket(TCP_PORT)) {
+        try (ServerSocket serverSocket = new ServerSocket(TCP_PORT_FOR_OTHER_TRACKERS)) {
             while (true) {
                 Socket socket = serverSocket.accept();
                 new Thread(() -> handleTrackerConnection(socket)).start();
@@ -79,9 +86,16 @@ public class Tracker {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 PrintWriter writer = new PrintWriter(socket.getOutputStream(), true)) {
             String trackerAddress = reader.readLine();
-            if (trackerAddress != null && !otherTrackers.contains(trackerAddress)) {
-                otherTrackers.add(trackerAddress);
-                writer.println("Tracker added: " + trackerAddress);
+            if (trackerAddress != null) {
+                trackerLock.lock();
+                try {
+                    if (!otherTrackers.contains(trackerAddress)) {
+                        otherTrackers.add(trackerAddress);
+                        writer.println("Tracker added: " + trackerAddress);
+                    }
+                } finally {
+                    trackerLock.unlock();
+                }
             }
         } catch (IOException e) {
             e.printStackTrace();
@@ -89,7 +103,7 @@ public class Tracker {
     }
 
     private void listenForPeers() {
-        try (DatagramSocket socket = new DatagramSocket(TRACKER_PORT)) {
+        try (DatagramSocket socket = new DatagramSocket(UDP_PEER_TO_TRACKER)) {
             byte[] buffer = new byte[BUFFER_SIZE];
             while (true) {
                 DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
@@ -108,16 +122,22 @@ public class Tracker {
             int port = packet.getPort();
             String response;
 
-            if (message.startsWith("share")) {
-                String fileName = message.substring(6).trim();
-                peers.computeIfAbsent(address.getHostAddress(),
-                        k -> new PeerInfo(address, port, ConcurrentHashMap.newKeySet())).getSharedFiles().add(fileName);
-                response = "File shared: " + fileName;
-            } else if (message.startsWith("get")) {
-                String fileName = message.substring(4).trim();
-                response = getOldestPeerWithFile(fileName);
-            } else {
-                response = "Invalid command";
+            peerLock.writeLock().lock();
+            try {
+                if (message.startsWith("share")) {
+                    String fileName = message.substring(6).trim();
+                    peers.computeIfAbsent(address.toString(),
+                            k -> new PeerInfo(address, port)).getSharedFiles()
+                            .add(fileName);
+                    response = "File shared: " + fileName;
+                } else if (message.startsWith("get")) {
+                    String fileName = message.substring(4).trim();
+                    response = getOldestPeerWithFile(fileName);
+                } else {
+                    response = "Invalid command";
+                }
+            } finally {
+                peerLock.writeLock().unlock();
             }
 
             byte[] responseData = response.getBytes();
@@ -131,10 +151,62 @@ public class Tracker {
     }
 
     private String getOldestPeerWithFile(String fileName) {
-        return peers.values().stream()
-                .filter(peer -> peer.getSharedFiles().contains(fileName))
-                .min(Comparator.comparingLong(PeerInfo::getLoginTime))
-                .map(peer -> peer.getIp().getHostAddress() + ":" + peer.getPort())
-                .orElse("File not found");
+        peerLock.readLock().lock();
+        try {
+            return peers.values().stream()
+                    .filter(peer -> peer.getSharedFiles().contains(fileName))
+                    .findFirst()
+                    .map(peer -> peer.getIp().getHostAddress() + ":" + peer.getPort())
+                    .orElse("File not found");
+        } finally {
+            peerLock.readLock().unlock();
+        }
+    }
+
+    private void checkPeerHealth() {
+        while (true) {
+            try {
+                Thread.sleep(PEER_CHECK_INTERVAL_MS);
+                List<String> toRemove = new ArrayList<>();
+
+                peerLock.readLock().lock();
+                try {
+                    for (Map.Entry<String, PeerInfo> entry : peers.entrySet()) {
+                        if (!isPeerAlive(entry.getValue())) {
+                            toRemove.add(entry.getKey());
+                        }
+                    }
+                } finally {
+                    peerLock.readLock().unlock();
+                }
+
+                peerLock.writeLock().lock();
+                try {
+                    for (String key : toRemove) {
+                        peers.remove(key);
+                    }
+                } finally {
+                    peerLock.writeLock().unlock();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+    private boolean isPeerAlive(PeerInfo peer) {
+        try (DatagramSocket socket = new DatagramSocket()) {
+            byte[] pingMessage = "ping".getBytes();
+            DatagramPacket packet = new DatagramPacket(pingMessage, pingMessage.length, peer.getIp(), peer.getPort());
+            socket.send(packet);
+
+            socket.setSoTimeout(5000);
+            byte[] buffer = new byte[BUFFER_SIZE];
+            DatagramPacket responsePacket = new DatagramPacket(buffer, buffer.length);
+            socket.receive(responsePacket);
+            String response = new String(responsePacket.getData(), 0, responsePacket.getLength()).trim();
+            return "pong".equals(response);
+        } catch (IOException e) {
+            return false;
+        }
     }
 }
