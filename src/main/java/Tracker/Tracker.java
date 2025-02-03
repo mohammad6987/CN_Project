@@ -158,15 +158,32 @@ public class Tracker {
                     peerList.add(peer.getIp().getHostAddress() + ":" + peer.getPort());
                 }
             }
-            if (!peerList.isEmpty())
+            if (!peerList.isEmpty()) {
                 return String.join(", ", peerList);
-
-            return requestFileFromOtherTrackers(fileName);
-
+            }
+    
+            String trackerResponse = requestFileFromOtherTrackers(fileName);
+            if (!trackerResponse.equals("File not found")) {
+                String[] trackerIps = trackerResponse.split(", ");
+                trackerLock.lock();
+                try {
+                    for (String trackerIp : trackerIps) {
+                        if (!otherTrackers.contains(trackerIp)) {
+                            otherTrackers.add(trackerIp);
+                        }
+                    }
+                } finally {
+                    trackerLock.unlock();
+                }
+                return trackerResponse;
+            }
+    
+            return "File not found";
         } finally {
             peerLock.readLock().unlock();
         }
     }
+    
 
     private String requestFileFromOtherTrackers(String fileName) {
         for (String tracker : otherTrackers) {
@@ -217,7 +234,7 @@ public class Tracker {
     }
 
     private boolean isPeerAlive(PeerInfo peer) {
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 3; ++i) {
             try (DatagramSocket socket = new DatagramSocket()) {
                 byte[] pingMessage = "ping".getBytes();
                 DatagramPacket packet = new DatagramPacket(pingMessage, pingMessage.length, peer.getIp(),
