@@ -6,9 +6,9 @@ import java.util.*;
 import java.util.concurrent.*;
 
 public class Peer {
-    private static final int SERVER_PORT = 5000;
+    private static final int SERVER_PORT = 6885;
     private static final int TRACKER_PORT = 6881;
-    private static final String[] TRACKER_IPS = { "127.0.0.1" };
+    private static final String[] TRACKER_IPS = { "192.168.144.64" };
     private static final Map<String, File> sharedFiles = new ConcurrentHashMap<>();
     private static final ExecutorService uploadPool = Executors.newFixedThreadPool(5);
     private static final Object downloadLock = new Object();
@@ -16,24 +16,26 @@ public class Peer {
     private static final Map<String, ProgressBar> downloadProgressBars = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
-        new Thread(Peer::startServer).start(); // Start listening for incoming file requests
+        startServer();
         startPingListener();
         startCLI();
     }
 
     private static void startServer() {
-        try (ServerSocket serverSocket = new ServerSocket(SERVER_PORT)) {
-            System.out.println("Peer listening on port " + SERVER_PORT);
-            while (true) {
-                Socket clientSocket = serverSocket.accept();
-                uploadPool.execute(() -> handleUploadRequest(clientSocket));
+        new Thread(()->{
+            try (ServerSocket serverSocket = new ServerSocket(SERVER_PORT)) {
+                System.out.println("Peer listening on port " + SERVER_PORT);
+                while (true) {
+                    Socket clientSocket = serverSocket.accept();
+                    uploadPool.execute(() -> handleUploadRequest(clientSocket));
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
             }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        }).start();
     }
 
-    private static final int PING_PORT = 6883; // Port to listen for pings
+    private static final int PING_PORT = 6883; 
 
     private static void startPingListener() {
         new Thread(() -> {
@@ -104,10 +106,7 @@ public class Peer {
                 String command = scanner.nextLine();
                 String[] parts = command.split(" ");
 
-                if (parts.length < 3) {
-                    System.out.println("Invalid command");
-                    continue;
-                }
+                
 
                 switch (parts[0]) {
                     case "share":
@@ -134,27 +133,57 @@ public class Peer {
         }
     }
 
-    private static void shareFile(String filePath, String trackerAddress, String listenAddress) {
+    private static void shareFile(String filePath, String trackerAddress, String listenPortStr) {
         File file = new File(filePath);
         if (!file.exists()) {
             System.out.println("File does not exist");
             return;
         }
-
-        sharedFiles.put(file.getName(), file);
-        try (DatagramSocket socket = new DatagramSocket()) {
-            String message = "share " + file.getName() + " " + listenAddress + " " + SERVER_PORT;
+    
+        int listenPort;
+        try {
+            listenPort = Integer.parseInt(listenPortStr);
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid port number: " + listenPortStr);
+            return;
+        }
+    
+        try (DatagramSocket socket = new DatagramSocket(listenPort)) {  
+            String message = "share " + file.getName() + " " + trackerAddress + " " + listenPort;
             byte[] buffer = message.getBytes();
+    
             for (String trackerIp : TRACKER_IPS) {
-                DatagramPacket packet = new DatagramPacket(buffer, buffer.length, InetAddress.getByName(trackerIp),
-                        TRACKER_PORT);
+                DatagramPacket packet = new DatagramPacket(buffer, buffer.length, InetAddress.getByName(trackerIp), TRACKER_PORT);
                 socket.send(packet);
             }
-            System.out.println("Shared file: " + file.getName());
+            System.out.println("Sent share request: " + file.getName());
+    
+    
+            byte[] responseBuffer = new byte[1024];
+            DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
+            socket.setSoTimeout(5000);  // Timeout in case the tracker doesn't respond
+    
+            try {
+                socket.receive(responsePacket);
+                String response = new String(responsePacket.getData(), 0, responsePacket.getLength()).trim();
+                System.out.println("Tracker response: " + response);
+    
+               
+                if (response.startsWith("File shared successfully")) {
+                    sharedFiles.put(file.getName(), file);
+                    System.out.println("File " + file.getName() + " successfully registered with tracker.");
+                } else {
+                    System.out.println("Error from tracker: " + response);
+                }
+            } catch (SocketTimeoutException e) {
+                System.out.println("Tracker did not respond in time.");
+            }
+    
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
+    
 
     private static void getFile(String fileName) {
         synchronized (downloadLock) {

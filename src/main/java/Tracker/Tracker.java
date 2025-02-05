@@ -83,7 +83,7 @@ public class Tracker {
 
     private void handleTrackerConnection(Socket socket) {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                PrintWriter writer = new PrintWriter(socket.getOutputStream(), true)) {        
+                PrintWriter writer = new PrintWriter(socket.getOutputStream(), true)) {
             String trackerAddress = reader.readLine();
             if (trackerAddress != null) {
                 trackerLock.lock();
@@ -104,8 +104,7 @@ public class Tracker {
     private void listenForPeers() {
         try (DatagramSocket socket = new DatagramSocket(UDP_PEER_TO_TRACKER)) {
             byte[] buffer = new byte[BUFFER_SIZE];
-          
-        
+
             while (true) {
                 DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                 socket.receive(packet);
@@ -121,8 +120,9 @@ public class Tracker {
             String message = new String(packet.getData(), 0, packet.getLength()).trim();
             InetAddress address = packet.getAddress();
             int port = packet.getPort();
+            int tempPort;
             String response;
-            System.out.println("got a peer packet : ip :" + address + " message: "+message);
+            System.out.println("got a peer packet : ip :" + address + " message: " + message);
             peerLock.writeLock().lock();
             try {
                 if (message.startsWith("share") && message.length() > 6) {
@@ -130,20 +130,24 @@ public class Tracker {
                     peers.computeIfAbsent(address.toString(),
                             k -> new PeerInfo(address, port)).getSharedFiles()
                             .add(fileName);
-                    response = "File shared: " + fileName;
-                    System.out.println(peers.toString());
+                    response = "File shared successfully: " + fileName;
+                    tempPort = Integer.parseInt(message.split(" ")[3]);
+
                 } else if (message.startsWith("get") && message.length() > 4) {
                     String fileName = message.substring(4).trim();
                     response = getPeersWithFile(fileName);
+                    tempPort = port;
                 } else {
                     response = "Invalid command";
+                    tempPort = port;
                 }
             } finally {
                 peerLock.writeLock().unlock();
             }
             // Nisixixixi
             byte[] responseData = response.getBytes();
-            DatagramPacket responsePacket = new DatagramPacket(responseData, responseData.length, address, port);
+            DatagramPacket responsePacket = new DatagramPacket(responseData, responseData.length, address, tempPort);
+            System.out.print(tempPort);
             try (DatagramSocket socket = new DatagramSocket()) {
                 socket.send(responsePacket);
             }
@@ -164,7 +168,7 @@ public class Tracker {
             if (!peerList.isEmpty()) {
                 return String.join(", ", peerList);
             }
-    
+
             String trackerResponse = requestFileFromOtherTrackers(fileName);
             if (!trackerResponse.equals("File not found")) {
                 String[] trackerIps = trackerResponse.split(", ");
@@ -180,13 +184,12 @@ public class Tracker {
                 }
                 return trackerResponse;
             }
-    
+
             return "File not found";
         } finally {
             peerLock.readLock().unlock();
         }
     }
-    
 
     private String requestFileFromOtherTrackers(String fileName) {
         for (String tracker : otherTrackers) {
@@ -209,7 +212,7 @@ public class Tracker {
         while (true) {
             try {
                 Thread.sleep(PEER_CHECK_INTERVAL_MS);
-                System.out.println("stareted checking health with "+ peers.size() + "peers !");
+                System.out.println("stareted checking health with " + peers.size() + " peers !");
                 List<String> toRemove = new ArrayList<>();
 
                 peerLock.readLock().lock();
