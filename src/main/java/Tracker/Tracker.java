@@ -12,7 +12,7 @@ public class Tracker {
     private static final int TCP_PORT_FILE_REQUESTS_FROM_OTHER_TRAKCERS = 6883;
     private static final int BUFFER_SIZE = 1024;
     private static final int TIMEOUT_MS = 300_000;
-    private static final int PEER_CHECK_INTERVAL_MS = 60000;
+    private static final int PEER_CHECK_INTERVAL_MS = 20000;
     private Map<String, PeerInfo> peers = new ConcurrentHashMap<>();
     private List<String> otherTrackers;
     private ReadWriteLock peerLock = new ReentrantReadWriteLock();
@@ -83,7 +83,7 @@ public class Tracker {
 
     private void handleTrackerConnection(Socket socket) {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                PrintWriter writer = new PrintWriter(socket.getOutputStream(), true)) {
+                PrintWriter writer = new PrintWriter(socket.getOutputStream(), true)) {        
             String trackerAddress = reader.readLine();
             if (trackerAddress != null) {
                 trackerLock.lock();
@@ -104,6 +104,8 @@ public class Tracker {
     private void listenForPeers() {
         try (DatagramSocket socket = new DatagramSocket(UDP_PEER_TO_TRACKER)) {
             byte[] buffer = new byte[BUFFER_SIZE];
+          
+        
             while (true) {
                 DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                 socket.receive(packet);
@@ -120,15 +122,16 @@ public class Tracker {
             InetAddress address = packet.getAddress();
             int port = packet.getPort();
             String response;
-
+            System.out.println("got a peer packet : ip :" + address + " message: "+message);
             peerLock.writeLock().lock();
             try {
                 if (message.startsWith("share") && message.length() > 6) {
-                    String fileName = message.substring(6).trim();
+                    String fileName = message.split(" ")[1];
                     peers.computeIfAbsent(address.toString(),
                             k -> new PeerInfo(address, port)).getSharedFiles()
                             .add(fileName);
                     response = "File shared: " + fileName;
+                    System.out.println(peers.toString());
                 } else if (message.startsWith("get") && message.length() > 4) {
                     String fileName = message.substring(4).trim();
                     response = getPeersWithFile(fileName);
@@ -206,6 +209,7 @@ public class Tracker {
         while (true) {
             try {
                 Thread.sleep(PEER_CHECK_INTERVAL_MS);
+                System.out.println("stareted checking health with "+ peers.size() + "peers !");
                 List<String> toRemove = new ArrayList<>();
 
                 peerLock.readLock().lock();
@@ -238,7 +242,7 @@ public class Tracker {
             try (DatagramSocket socket = new DatagramSocket()) {
                 byte[] pingMessage = "ping".getBytes();
                 DatagramPacket packet = new DatagramPacket(pingMessage, pingMessage.length, peer.getIp(),
-                        peer.getPort());
+                        6883);
                 socket.send(packet);
 
                 socket.setSoTimeout(5000);

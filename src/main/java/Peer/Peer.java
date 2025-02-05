@@ -7,7 +7,7 @@ import java.util.concurrent.*;
 
 public class Peer {
     private static final int SERVER_PORT = 5000;
-    private static final int TRACKER_PORT = 6771;
+    private static final int TRACKER_PORT = 6881;
     private static final String[] TRACKER_IPS = { "127.0.0.1" };
     private static final Map<String, File> sharedFiles = new ConcurrentHashMap<>();
     private static final ExecutorService uploadPool = Executors.newFixedThreadPool(5);
@@ -17,6 +17,7 @@ public class Peer {
 
     public static void main(String[] args) {
         new Thread(Peer::startServer).start(); // Start listening for incoming file requests
+        startPingListener();
         startCLI();
     }
 
@@ -30,6 +31,35 @@ public class Peer {
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    private static final int PING_PORT = 6883; // Port to listen for pings
+
+    private static void startPingListener() {
+        new Thread(() -> {
+            try (DatagramSocket socket = new DatagramSocket(PING_PORT)) {
+                byte[] buffer = new byte[1024];
+                System.out.println("Ping listener started on port " + PING_PORT);
+
+                while (true) {
+                    DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                    socket.receive(packet); // Wait for a ping
+
+                    String message = new String(packet.getData(), 0, packet.getLength()).trim();
+                    if ("ping".equals(message)) {
+                        // Send pong response back
+                        InetAddress senderIP = packet.getAddress();
+                        int senderPort = packet.getPort();
+                        byte[] pongResponse = "pong".getBytes();
+                        DatagramPacket responsePacket = new DatagramPacket(pongResponse, pongResponse.length, senderIP,
+                                senderPort);
+                        socket.send(responsePacket);
+                    }
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }).start();
     }
 
     private static void handleUploadRequest(Socket socket) {
@@ -68,8 +98,9 @@ public class Peer {
     private static void startCLI() {
         Scanner scanner = new Scanner(System.in);
         try {
+            System.out.println("Starting new peer on " + InetAddress.getLocalHost().getHostAddress());
             while (true) {
-                System.out.print("Enter command: ");
+                System.out.print("> ");
                 String command = scanner.nextLine();
                 String[] parts = command.split(" ");
 
