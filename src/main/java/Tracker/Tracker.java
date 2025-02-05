@@ -92,6 +92,7 @@ public class Tracker {
                         otherTrackers.add(trackerAddress);
                         writer.println("Tracker added: " + trackerAddress);
                     }
+                    
                 } finally {
                     trackerLock.unlock();
                 }
@@ -147,7 +148,6 @@ public class Tracker {
             // Nisixixixi
             byte[] responseData = response.getBytes();
             DatagramPacket responsePacket = new DatagramPacket(responseData, responseData.length, address, tempPort);
-            System.out.print(tempPort);
             try (DatagramSocket socket = new DatagramSocket()) {
                 socket.send(responsePacket);
             }
@@ -166,6 +166,7 @@ public class Tracker {
                 }
             }
             if (!peerList.isEmpty()) {
+                System.out.println(String.join(", ", peerList)); 
                 return String.join(", ", peerList);
             }
 
