@@ -6,9 +6,8 @@ import java.util.*;
 import java.util.concurrent.*;
 
 public class Peer {
-    // Remove "final" so that these values can be set via command-line arguments.
     private static int serverPort = 6885;   // File server port (for uploads)
-    private static final int TRACKER_PORT = 6881;  // Tracker port (assumed constant)
+    private static final int TRACKER_PORT = 6881;  // Tracker port
     private static int pingPort = 6883;     // Ping listener port
     private static final String[] TRACKER_IPS = { "192.168.144.64" };
     
@@ -19,8 +18,7 @@ public class Peer {
     private static final Map<String, ProgressBar> downloadProgressBars = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
-        // Allow the user to specify serverPort and pingPort on the command line.
-        // For example: java Peer 7000 7001
+        
         if (args.length >= 1) {
             try {
                 serverPort = Integer.parseInt(args[0]);
@@ -53,7 +51,7 @@ public class Peer {
 
     }
 
-    // Start the file upload server on the specified serverPort.
+    // start the file upload server on the specified serverPort.
     private void startServer() {
         new Thread(() -> {
             try (ServerSocket serverSocket = new ServerSocket(serverPort)) {
@@ -68,7 +66,6 @@ public class Peer {
         }).start();
     }
 
-    // Start the ping listener on the specified pingPort.
     private void startPingListener() {
         new Thread(() -> {
             try (DatagramSocket socket = new DatagramSocket(pingPort)) {
@@ -76,14 +73,14 @@ public class Peer {
                 System.out.println("Ping listener started on port " + pingPort);
                 while (true) {
                     DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-                    socket.receive(packet); // Wait for a ping
+                    socket.receive(packet); 
 
                     String message = new String(packet.getData(), 0, packet.getLength()).trim();
-                    if ("ping".equals(message)) {
-                        // Send pong response back
+                    if ("Are you still alive?".equals(message)) {
+        
                         InetAddress senderIP = packet.getAddress();
                         int senderPort = packet.getPort();
-                        byte[] pongResponse = "pong".getBytes();
+                        byte[] pongResponse = "yep , I am still alive.".getBytes();
                         DatagramPacket responsePacket = new DatagramPacket(pongResponse, pongResponse.length, senderIP, senderPort);
                         socket.send(responsePacket);
                     }
@@ -94,7 +91,7 @@ public class Peer {
         }).start();
     }
 
-    // Handles incoming file requests.
+    
     private void handleUploadRequest(Socket socket) {
         try (DataInputStream dis = new DataInputStream(socket.getInputStream());
              DataOutputStream dos = new DataOutputStream(socket.getOutputStream())) {
@@ -127,7 +124,7 @@ public class Peer {
         }
     }
 
-    // Command-line interface (CLI) for user commands.
+    // CLI for user commands.
     private void startCLI() {
         Scanner scanner = new Scanner(System.in);
         try {
@@ -180,7 +177,7 @@ public class Peer {
         }
     
         try (DatagramSocket socket = new DatagramSocket(listenPort)) {
-            String message = "share " + file.getName() + " " + trackerAddress + " " + listenPort;
+            String message = "share " + file.getName() + " " + trackerAddress + " " + listenPort + " "+ serverPort + " "+ pingPort;
             byte[] buffer = message.getBytes();
     
             for (String trackerIp : TRACKER_IPS) {
@@ -245,8 +242,9 @@ public class Peer {
         }
     }
     
-    // Connects to the peer that has the file and downloads it.
+    
     private void downloadFile(String fileName, String peerIP, int peerPort) {
+        boolean success = false;
         try (Socket socket = new Socket(peerIP, peerPort);
              DataInputStream dis = new DataInputStream(socket.getInputStream());
              DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
@@ -270,14 +268,29 @@ public class Peer {
             }
     
             downloadProgressBars.remove(fileName);
-            System.out.println("Downloaded: " + fileName);
+            System.out.println("\nDownloaded: " + fileName);
             sharedFiles.put(fileName, new File(fileName));
+            success = true;
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        sendDownloadAckToTracker(fileName, success);
+    }
+
+    private void sendDownloadAckToTracker(String fileName, boolean success) {
+        try (DatagramSocket socket = new DatagramSocket()) {
+            String message = "ack " + fileName +" "+serverPort+ " " + (success ? "success" : "failure") + " "+ pingPort;
+            byte[] buffer = message.getBytes();
+            for (String trackerIp : TRACKER_IPS) {
+                DatagramPacket packet = new DatagramPacket(buffer, buffer.length, InetAddress.getByName(trackerIp), TRACKER_PORT);
+                socket.send(packet);
+            }
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
     
-    // Inner class for displaying a progress bar in the console.
+    
     private class ProgressBar {
         private final long totalSize;
         private long currentProgress;

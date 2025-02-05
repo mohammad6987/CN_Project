@@ -20,13 +20,17 @@ public class Tracker {
 
     public class PeerInfo {
         private final InetAddress ip;
-        private final int port;
+        private final int listenPort;
+        private final int serverPort;
+        private final int pingPort;
         private volatile long lastSeen;
         private final Set<String> sharedFiles;
 
-        public PeerInfo(InetAddress ip, int port) {
+        public PeerInfo(InetAddress ip, int listenport,int serverPort, int pingPort) {
             this.ip = ip;
-            this.port = port;
+            this.listenPort = listenport;
+            this.serverPort = serverPort;
+            this.pingPort = pingPort;
             this.lastSeen = System.currentTimeMillis();
             this.sharedFiles = ConcurrentHashMap.newKeySet();
         }
@@ -39,8 +43,15 @@ public class Tracker {
             return ip;
         }
 
-        public int getPort() {
-            return port;
+        public int getListenPort() {
+            return listenPort;
+        }
+        public int getServerPort(){
+            return serverPort;
+        }
+
+        public int getPingPort(){
+            return pingPort;
         }
 
         public long getLastSeen() {
@@ -92,7 +103,7 @@ public class Tracker {
                         otherTrackers.add(trackerAddress);
                         writer.println("Tracker added: " + trackerAddress);
                     }
-                    
+
                 } finally {
                     trackerLock.unlock();
                 }
@@ -121,6 +132,7 @@ public class Tracker {
             String message = new String(packet.getData(), 0, packet.getLength()).trim();
             InetAddress address = packet.getAddress();
             int port = packet.getPort();
+            
             int tempPort;
             String response;
             System.out.println("got a peer packet : ip :" + address + " message: " + message);
@@ -128,8 +140,10 @@ public class Tracker {
             try {
                 if (message.startsWith("share") && message.length() > 6) {
                     String fileName = message.split(" ")[1];
-                    peers.computeIfAbsent(address.toString(),
-                            k -> new PeerInfo(address, port)).getSharedFiles()
+                    int peerServerPort = Integer.parseInt(message.split(" ")[4]);
+                    int peerPingPort = Integer.parseInt(message.split(" ")[5]);
+                    peers.computeIfAbsent(address.toString()+":"+peerServerPort,
+                            k -> new PeerInfo(address, port , peerServerPort , peerPingPort)).getSharedFiles()
                             .add(fileName);
                     response = "File shared successfully: " + fileName;
                     tempPort = Integer.parseInt(message.split(" ")[3]);
@@ -138,6 +152,22 @@ public class Tracker {
                     String fileName = message.substring(4).trim();
                     response = getPeersWithFile(fileName);
                     tempPort = port;
+                }else if(message.startsWith("ack") && message.length() > 4){
+                    String[] info = message.split(" ");
+                    String senderKey = address.toString() +":"+ info[2];
+                    tempPort = 8080;
+                    if(info[3].equals("success")){
+
+                        peers.computeIfAbsent(senderKey, x ->new PeerInfo(address, port, Integer.parseInt(info[2]) ,Integer.parseInt(info[4])));
+                        peers.get(senderKey).sharedFiles.add(info[1]);
+                        response = senderKey + " successfully donwloaded " +info[1];
+                    }else{
+                        response = senderKey + " couldn't download " +info[1];
+                    }
+
+
+
+
                 } else {
                     response = "Invalid command";
                     tempPort = port;
@@ -162,11 +192,11 @@ public class Tracker {
             List<String> peerList = new ArrayList<>();
             for (PeerInfo peer : peers.values()) {
                 if (peer.getSharedFiles().contains(fileName)) {
-                    peerList.add(peer.getIp().getHostAddress() + ":" + peer.getPort());
+                    peerList.add(peer.getIp().getHostAddress() + ":" + peer.getServerPort());
                 }
             }
             if (!peerList.isEmpty()) {
-                System.out.println(String.join(", ", peerList)); 
+                System.out.println(String.join(", ", peerList));
                 return String.join(", ", peerList);
             }
 
@@ -210,10 +240,11 @@ public class Tracker {
     }
 
     private void checkPeerHealth() {
+        StringBuilder builder = new StringBuilder();
         while (true) {
             try {
                 Thread.sleep(PEER_CHECK_INTERVAL_MS);
-                System.out.println("stareted checking health with " + peers.size() + " peers !");
+                //System.out.println("stareted checking health with " + peers.size() + " peers !");
                 List<String> toRemove = new ArrayList<>();
 
                 peerLock.readLock().lock();
@@ -232,6 +263,11 @@ public class Tracker {
                     for (String key : toRemove) {
                         peers.remove(key);
                     }
+                    builder = new StringBuilder();
+                    for(String key:peers.keySet()){
+                        builder.append(key + " ");
+                    }
+                    System.out.println("alive peers :" + builder.toString());
                 } finally {
                     peerLock.writeLock().unlock();
                 }
@@ -244,9 +280,9 @@ public class Tracker {
     private boolean isPeerAlive(PeerInfo peer) {
         for (int i = 0; i < 3; ++i) {
             try (DatagramSocket socket = new DatagramSocket()) {
-                byte[] pingMessage = "ping".getBytes();
+                byte[] pingMessage = "Are you still alive?".getBytes();
                 DatagramPacket packet = new DatagramPacket(pingMessage, pingMessage.length, peer.getIp(),
-                        6883);
+                        peer.pingPort);
                 socket.send(packet);
 
                 socket.setSoTimeout(5000);
@@ -254,7 +290,7 @@ public class Tracker {
                 DatagramPacket responsePacket = new DatagramPacket(buffer, buffer.length);
                 socket.receive(responsePacket);
                 String response = new String(responsePacket.getData(), 0, responsePacket.getLength()).trim();
-                return "pong".equals(response);
+                return "yep , I am still alive.".equals(response);
             } catch (IOException e) {
                 return false;
             }
