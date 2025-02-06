@@ -19,6 +19,11 @@ public class Peer {
     private static final Map<String, ProgressBar> downloadProgressBars = new ConcurrentHashMap<>();
     private SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
     private List<String> logs = new CopyOnWriteArrayList<>();
+
+    private void log(String message) {
+        String timestamp = dateFormat.format(new Date());
+        logs.add("[" + timestamp + "] " + message);
+    }
     public static void main(String[] args) {
         
         if (args.length >= 1) {
@@ -53,7 +58,7 @@ public class Peer {
 
     }
 
-    // start the file upload server on the specified serverPort.
+   
     private void startServer() {
         new Thread(() -> {
             try (ServerSocket serverSocket = new ServerSocket(serverPort)) {
@@ -78,6 +83,7 @@ public class Peer {
                     socket.receive(packet); 
 
                     String message = new String(packet.getData(), 0, packet.getLength()).trim();
+                    log(message);
                     if ("Are you still alive?".equals(message)) {
         
                         InetAddress senderIP = packet.getAddress();
@@ -215,6 +221,7 @@ public class Peer {
 
     private void getFile(String fileName , String trackerAddress) {
         synchronized (downloadLock) {
+            Random rand = new Random();
             try (DatagramSocket socket = new DatagramSocket()) {
                 String message = "get " + fileName;
                 byte[] buffer = message.getBytes();
@@ -232,8 +239,9 @@ public class Peer {
                     System.out.println("File not found on network");
                     return;
                 }
-    
-                String[] peerInfo = response.split(":");
+                String[] rawInfo = response.split(",");
+                int randomIndex = rand.nextInt(rawInfo.length);
+                String[] peerInfo = rawInfo[randomIndex].split(":");
                 String peerIP = peerInfo[0];
                 int peerPort = Integer.parseInt(peerInfo[1]);
     
