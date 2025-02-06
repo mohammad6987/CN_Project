@@ -31,6 +31,13 @@ public class Peer {
                 System.out.println("Invalid ping port number provided, using default: " + pingPort);
             }
         }
+        if (args.length >= 2) {
+            try {
+                serverPort = Integer.parseInt(args[1]);
+            } catch (NumberFormatException e) {
+                System.out.println("Invalid ping port number provided, using default: " + serverPort);
+            }
+        }
         try {
             System.out.println("Starting peer on IP: " + InetAddress.getLocalHost().getHostAddress() +
                     ", Ping Port: " + pingPort);
@@ -43,6 +50,7 @@ public class Peer {
 
     private void runner() {
         startPingListener();
+        startServer(serverPort, null);
         startCLI();
 
     }
@@ -92,14 +100,12 @@ public class Peer {
     private void handleUploadRequest(Socket socket, String originalfileName) {
         try (DataInputStream dis = new DataInputStream(socket.getInputStream());
                 DataOutputStream dos = new DataOutputStream(socket.getOutputStream())) {
-
             String fileName = dis.readUTF();
             if (!sharedFiles.containsKey(fileName)) {
                 dos.writeUTF("File not found");
                 return;
             }
             if (!fileName.equals(originalfileName)) {
-
                 dos.writeUTF("This port is not for this file !");
                 return;
             }
@@ -130,14 +136,13 @@ public class Peer {
         }
     }
 
-    // CLI for user commands.
     private void startCLI() {
         Scanner scanner = new Scanner(System.in);
         ExecutorService executor = Executors.newCachedThreadPool();
         try {
             System.out.println("Peer CLI started. Use commands such as:");
             System.out.println("  share <file_path> <tracker_address> <listen_port>");
-            System.out.println("  get <file_name>");
+            System.out.println("  get <file_name> <tracker_address> <listen_port>");
             while (true) {
                 System.out.print("> ");
                 String command = scanner.nextLine();
@@ -159,8 +164,8 @@ public class Peer {
                         executor.execute(() -> getFile(parts[1], parts[2], parts[3]));
                         break;
                     case "logs":
-                        for(String x: logs)
-                            System.out.println(x);    
+                        for (String x : logs)
+                            System.out.println(x);
                     default:
                         System.out.println("Unknown command");
                 }
@@ -177,7 +182,6 @@ public class Peer {
             System.out.println("File does not exist: " + filePath);
             return;
         }
-
         int listenPort;
         try {
             listenPort = Integer.parseInt(listenPortStr);
@@ -236,7 +240,7 @@ public class Peer {
                 DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
                 socket.receive(responsePacket);
                 String response = new String(responsePacket.getData(), 0, responsePacket.getLength());
-
+                log(response);
                 if (response.equals("File not found")) {
                     System.out.println("File not found on network");
                     return;
@@ -261,7 +265,6 @@ public class Peer {
                 DataInputStream dis = new DataInputStream(socket.getInputStream());
                 DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
                 FileOutputStream fos = new FileOutputStream(fileName)) {
-
             dos.writeUTF(fileName);
             dos.flush();
             long fileSize = dis.readLong();
@@ -269,14 +272,11 @@ public class Peer {
                 System.out.println("Invalid file size received.");
                 return;
             }
-
             ProgressBar progressBar = new ProgressBar(fileSize);
             downloadProgressBars.put(fileName, progressBar);
-
             byte[] buffer = new byte[4096];
             int bytesRead;
             long totalBytesReceived = 0;
-
             while (totalBytesReceived < fileSize
                     && (bytesRead = dis.read(buffer, 0, (int) Math.min(buffer.length, fileSize))) != -1) {
                 fos.write(buffer, 0, bytesRead);
@@ -285,22 +285,23 @@ public class Peer {
                 progressBar.updateProgress(totalBytesReceived);
                 fileSize -= bytesRead;
             }
-
             downloadProgressBars.remove(fileName);
             System.out.println("\nDownloaded: " + fileName);
             sharedFiles.put(fileName, new File(fileName));
-            success = (totalBytesReceived == fileSize);
+            success = true;
             if (success) {
                 System.out.println(
                         "you have downloaded a file , now you have to share it with others...\n select a port number:\n");
-                Scanner scanner = new Scanner(System.in);
                 boolean inloop = true;
+                Random random = new Random();
                 while (inloop) {
                     try {
-                        newpPort = Integer.parseInt(scanner.nextLine());
+                        newpPort = random.nextInt(64512) + 1024;
                         startServer(newpPort, fileName);
+                        inloop = false;
                     } catch (Exception e) {
-                        System.out.println("port number is not valid , try again...");
+                        System.out.println("Port in use or error occurred, trying a new port...\n");
+
                     }
                 }
             }
@@ -313,7 +314,7 @@ public class Peer {
     private void sendDownloadAckToTracker(String fileName, boolean success, String trackerAddress, int newPort) {
         try (DatagramSocket socket = new DatagramSocket()) {
             String message = "ack " + fileName + " " + newPort + " " + (success ? "success" : "failure") + " "
-                    + pingPort;
+                    + pingPort + " " + serverPort;
             byte[] buffer = message.getBytes();
 
             DatagramPacket packet = new DatagramPacket(buffer, buffer.length, InetAddress.getByName(trackerAddress),

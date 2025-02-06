@@ -106,7 +106,7 @@ public class Tracker {
 
                 } else if (command.startsWith("log requests ")) {
                     String[] info = command.split(" ");
-                    if (info.length > 2) {
+                    if (info.length < 2) {
                         System.out.println("Error in command format!");
                         continue;
                     }
@@ -167,27 +167,30 @@ public class Tracker {
      * }
      */
 
-    private void handleTrackerConnection(Socket socket) {
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                PrintWriter writer = new PrintWriter(socket.getOutputStream(), true)) {
-            String trackerAddress = reader.readLine();
-            if (trackerAddress != null) {
-                trackerLock.lock();
-                try {
-                    if (!otherTrackers.contains(trackerAddress)) {
-                        otherTrackers.add(trackerAddress);
-                        log("Tracker added: " + trackerAddress);
-                        writer.println("Tracker added: " + trackerAddress);
-                    }
-
-                } finally {
-                    trackerLock.unlock();
-                }
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
+    /*
+     * private void handleTrackerConnection(Socket socket) {
+     * try (BufferedReader reader = new BufferedReader(new
+     * InputStreamReader(socket.getInputStream()));
+     * PrintWriter writer = new PrintWriter(socket.getOutputStream(), true)) {
+     * String trackerAddress = reader.readLine();
+     * if (trackerAddress != null) {
+     * trackerLock.lock();
+     * try {
+     * if (!otherTrackers.contains(trackerAddress)) {
+     * otherTrackers.add(trackerAddress);
+     * log("Tracker added: " + trackerAddress);
+     * writer.println("Tracker added: " + trackerAddress);
+     * }
+     * 
+     * } finally {
+     * trackerLock.unlock();
+     * }
+     * }
+     * } catch (IOException e) {
+     * e.printStackTrace();
+     * }
+     * }
+     */
 
     private void listenForPeers() {
         try (DatagramSocket socket = new DatagramSocket(UDP_PEER_TO_TRACKER)) {
@@ -211,7 +214,7 @@ public class Tracker {
 
             int tempPort;
             String response;
-            log("Peer packet : ip :" + address + "\nmessage: " + message);
+            log("Peer packet : ip :" + address + "message: " + message);
             peerLock.writeLock().lock();
             try {
                 if (message.startsWith("share") && message.length() > 6) {
@@ -230,13 +233,13 @@ public class Tracker {
                     tempPort = port;
                 } else if (message.startsWith("ack") && message.length() > 4) {
                     String[] info = message.split(" ");
-                    String senderKey = address.toString() + ":" + info[2];
+                    String senderKey = address.toString() + ":" + info[5];
                     tempPort = 8080;
                     if (info[3].equals("success")) {
 
                         peers.computeIfAbsent(senderKey,
-                                x -> new PeerInfo(address, port, Integer.parseInt(info[2]), Integer.parseInt(info[4])));
-                        peers.get(senderKey).sharedFiles.put(info[1], Integer.parseInt(info[3]));
+                                x -> new PeerInfo(address, port, Integer.parseInt(info[5]), Integer.parseInt(info[4])));
+                        peers.get(senderKey).sharedFiles.put(info[1], Integer.parseInt(info[2]));
                         response = senderKey + " successfully donwloaded " + info[1];
                         log(senderKey + " successfully donwloaded " + info[1]);
                     } else {
@@ -275,21 +278,23 @@ public class Tracker {
                 return String.join(", ", peerList);
             }
 
-            /*String trackerResponse = requestFileFromOtherTrackers(fileName);
-            if (!trackerResponse.equals("File not found")) {
-                String[] trackerIps = trackerResponse.split(", ");
-                trackerLock.lock();
-                try {
-                    for (String trackerIp : trackerIps) {
-                        if (!otherTrackers.contains(trackerIp)) {
-                            otherTrackers.add(trackerIp);
-                        }
-                    }
-                } finally {
-                    trackerLock.unlock();
-                }
-                return trackerResponse;
-            }*/
+            /*
+             * String trackerResponse = requestFileFromOtherTrackers(fileName);
+             * if (!trackerResponse.equals("File not found")) {
+             * String[] trackerIps = trackerResponse.split(", ");
+             * trackerLock.lock();
+             * try {
+             * for (String trackerIp : trackerIps) {
+             * if (!otherTrackers.contains(trackerIp)) {
+             * otherTrackers.add(trackerIp);
+             * }
+             * }
+             * } finally {
+             * trackerLock.unlock();
+             * }
+             * return trackerResponse;
+             * }
+             */
 
             return "File not found";
         } finally {
@@ -297,22 +302,26 @@ public class Tracker {
         }
     }
 
-    private String requestFileFromOtherTrackers(String fileName) {
-        for (String tracker : otherTrackers) {
-            try (Socket socket = new Socket(tracker, TCP_PORT_FILE_REQUESTS_FROM_OTHER_TRAKCERS);
-                    PrintWriter writer = new PrintWriter(socket.getOutputStream(), true);
-                    BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
-                writer.println(fileName);
-                String response = reader.readLine();
-                if (response != null && !response.equals("File not found")) {
-                    return response;
-                }
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-        return "File not found";
-    }
+    /*
+     * private String requestFileFromOtherTrackers(String fileName) {
+     * for (String tracker : otherTrackers) {
+     * try (Socket socket = new Socket(tracker,
+     * TCP_PORT_FILE_REQUESTS_FROM_OTHER_TRAKCERS);
+     * PrintWriter writer = new PrintWriter(socket.getOutputStream(), true);
+     * BufferedReader reader = new BufferedReader(new
+     * InputStreamReader(socket.getInputStream()))) {
+     * writer.println(fileName);
+     * String response = reader.readLine();
+     * if (response != null && !response.equals("File not found")) {
+     * return response;
+     * }
+     * } catch (IOException e) {
+     * e.printStackTrace();
+     * }
+     * }
+     * return "File not found";
+     * }
+     */
 
     private void checkPeerHealth() {
         StringBuilder builder = new StringBuilder();
