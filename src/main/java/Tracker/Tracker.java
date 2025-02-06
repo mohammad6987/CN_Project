@@ -2,6 +2,7 @@ package Tracker;
 
 import java.io.*;
 import java.net.*;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.locks.*;
@@ -17,14 +18,16 @@ public class Tracker {
     private List<String> otherTrackers;
     private ReadWriteLock peerLock = new ReentrantReadWriteLock();
     private Lock trackerLock = new ReentrantLock();
+    private SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+    private List<String> logs = new CopyOnWriteArrayList<>();
 
     public class PeerInfo {
-        private final InetAddress ip;
-        private final int listenPort;
-        private final int serverPort;
-        private final int pingPort;
+        private  InetAddress ip;
+        private int listenPort;
+        private int serverPort;
+        private int pingPort;
         private volatile long lastSeen;
-        private final Set<String> sharedFiles;
+        private Set<String> sharedFiles;
 
         public PeerInfo(InetAddress ip, int listenport,int serverPort, int pingPort) {
             this.ip = ip;
@@ -74,11 +77,76 @@ public class Tracker {
 
     private void start() {
         System.out.println("tracker stated!");
-        ExecutorService executor = Executors.newFixedThreadPool(3);
+        ExecutorService executor = Executors.newFixedThreadPool(4);
         executor.execute(this::listenForTrackers);
         executor.execute(this::listenForPeers);
         executor.execute(this::checkPeerHealth);
         System.out.println("all services are functional!");
+        executor.execute(this::CLI);
+
+    }
+    private void log(String message) {
+        String timestamp = dateFormat.format(new Date());
+        logs.add("[" + timestamp + "] " + message);
+    }
+
+    private void CLI(){
+        Scanner scanner = new Scanner(System.in);
+        try{
+            int counter =0;
+            while(true){
+                counter = 0;
+                System.out.print("> ");
+                String command = scanner.nextLine();
+                if(command.equals("all-logs")){
+                    for(String x : logs)
+                        System.out.println(x);
+
+                }else if(command.startsWith("log requests ")){
+                    String[] info = command.split(" ");
+                    if(info.length > 2){
+                        System.out.println("Error in command format!");
+                        continue;
+                    }
+                    String keyword = info[1];
+                    for(String log : logs){
+                        if(log.contains(keyword)){
+                            System.out.println(log);
+                            counter++;
+                        }
+                        if(counter == 0){
+                            System.out.println("No log with this IP");
+                        }
+                    }
+                }else if (command.startsWith("file_logs ")){
+                    String[] info = command.split(" ");
+                    if(info.length > 2){
+                        System.out.println("Error in command format!");
+                        continue;
+                    }
+                    String keyword = info[1];
+                    for(String log : logs){
+                        if(log.contains(keyword)){
+                            System.out.println(log);
+                            counter++;
+                        }
+                        if(counter == 0){
+                            System.out.println("No log with this FileName!");
+                        }
+                    }
+
+                }else{
+
+                    System.out.println("Invalid command!");
+                }
+            
+            }
+
+
+        }catch(Exception e){
+
+        }
+        
     }
 
     private void listenForTrackers() {
@@ -101,6 +169,7 @@ public class Tracker {
                 try {
                     if (!otherTrackers.contains(trackerAddress)) {
                         otherTrackers.add(trackerAddress);
+                        log("Tracker added: " + trackerAddress);
                         writer.println("Tracker added: " + trackerAddress);
                     }
 
@@ -135,7 +204,7 @@ public class Tracker {
             
             int tempPort;
             String response;
-            System.out.println("got a peer packet : ip :" + address + " message: " + message);
+            log("got a peer packet : ip :" + address + " message: " + message);
             peerLock.writeLock().lock();
             try {
                 if (message.startsWith("share") && message.length() > 6) {
@@ -161,8 +230,10 @@ public class Tracker {
                         peers.computeIfAbsent(senderKey, x ->new PeerInfo(address, port, Integer.parseInt(info[2]) ,Integer.parseInt(info[4])));
                         peers.get(senderKey).sharedFiles.add(info[1]);
                         response = senderKey + " successfully donwloaded " +info[1];
+                        log(senderKey + " successfully donwloaded " + info[1]);
                     }else{
                         response = senderKey + " couldn't download " +info[1];
+                        log(senderKey + " couldn't download " + info[1]);
                     }
 
 
@@ -259,15 +330,18 @@ public class Tracker {
                 }
 
                 peerLock.writeLock().lock();
+                builder = new StringBuilder();
                 try {
                     for (String key : toRemove) {
+                        builder.append(key);
                         peers.remove(key);
                     }
+                    log("dead peers : "+builder.toString());
                     builder = new StringBuilder();
                     for(String key:peers.keySet()){
                         builder.append(key + " ");
                     }
-                    System.out.println("alive peers :" + builder.toString());
+                    log("alive peers : " + builder.toString());
                 } finally {
                     peerLock.writeLock().unlock();
                 }

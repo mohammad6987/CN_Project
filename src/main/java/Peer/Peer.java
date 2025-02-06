@@ -2,6 +2,7 @@ package Peer;
 
 import java.io.*;
 import java.net.*;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -16,7 +17,8 @@ public class Peer {
     private static final Object downloadLock = new Object();
     private static final Map<String, ProgressBar> uploadProgressBars = new ConcurrentHashMap<>();
     private static final Map<String, ProgressBar> downloadProgressBars = new ConcurrentHashMap<>();
-
+    private SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+    private List<String> logs = new CopyOnWriteArrayList<>();
     public static void main(String[] args) {
         
         if (args.length >= 1) {
@@ -149,7 +151,7 @@ public class Peer {
                             System.out.println("Usage: get <file_name>");
                             continue;
                         }
-                        getFile(parts[1]);
+                        getFile(parts[1] , parts[2]);
                         break;
                     default:
                         System.out.println("Unknown command");
@@ -211,15 +213,15 @@ public class Peer {
     }
     
 
-    private void getFile(String fileName) {
+    private void getFile(String fileName , String trackerAddress) {
         synchronized (downloadLock) {
             try (DatagramSocket socket = new DatagramSocket()) {
                 String message = "get " + fileName;
                 byte[] buffer = message.getBytes();
-                for (String trackerIp : TRACKER_IPS) {
-                    DatagramPacket packet = new DatagramPacket(buffer, buffer.length, InetAddress.getByName(trackerIp), TRACKER_PORT);
-                    socket.send(packet);
-                }
+                
+                DatagramPacket packet = new DatagramPacket(buffer, buffer.length, InetAddress.getByName(trackerAddress), TRACKER_PORT);
+                socket.send(packet);
+                
     
                 byte[] responseBuffer = new byte[1024];
                 DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
