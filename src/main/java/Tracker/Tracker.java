@@ -12,7 +12,6 @@ public class Tracker {
     private static final int TCP_PORT_FOR_OTHER_TRACKERS = 6882;
     private static final int TCP_PORT_FILE_REQUESTS_FROM_OTHER_TRAKCERS = 6883;
     private static final int BUFFER_SIZE = 1024;
-    private static final int TIMEOUT_MS = 300_000;
     private static final int PEER_CHECK_INTERVAL_MS = 20000;
     private Map<String, PeerInfo> peers = new ConcurrentHashMap<>();
     private List<String> otherTrackers;
@@ -20,22 +19,23 @@ public class Tracker {
     private Lock trackerLock = new ReentrantLock();
     private SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
     private List<String> logs = new CopyOnWriteArrayList<>();
+    ExecutorService executor;
 
     public class PeerInfo {
-        private  InetAddress ip;
+        private InetAddress ip;
         private int listenPort;
         private int serverPort;
         private int pingPort;
         private volatile long lastSeen;
-        private Set<String> sharedFiles;
+        private HashMap<String, Integer> sharedFiles;
 
-        public PeerInfo(InetAddress ip, int listenport,int serverPort, int pingPort) {
+        public PeerInfo(InetAddress ip, int listenport, int serverPort, int pingPort) {
             this.ip = ip;
             this.listenPort = listenport;
             this.serverPort = serverPort;
             this.pingPort = pingPort;
             this.lastSeen = System.currentTimeMillis();
-            this.sharedFiles = ConcurrentHashMap.newKeySet();
+            this.sharedFiles = new HashMap<>();
         }
 
         public void updateLastSeen() {
@@ -49,11 +49,12 @@ public class Tracker {
         public int getListenPort() {
             return listenPort;
         }
-        public int getServerPort(){
+
+        public int getServerPort() {
             return serverPort;
         }
 
-        public int getPingPort(){
+        public int getPingPort() {
             return pingPort;
         }
 
@@ -61,7 +62,7 @@ public class Tracker {
             return lastSeen;
         }
 
-        public Set<String> getSharedFiles() {
+        public HashMap<String, Integer> getSharedFiles() {
             return sharedFiles;
         }
     }
@@ -77,88 +78,94 @@ public class Tracker {
 
     private void start() {
         System.out.println("tracker stated!");
-        ExecutorService executor = Executors.newFixedThreadPool(4);
-        executor.execute(this::listenForTrackers);
+        executor = Executors.newFixedThreadPool(3);
+        // executor.execute(this::listenForTrackers);
         executor.execute(this::listenForPeers);
         executor.execute(this::checkPeerHealth);
-        System.out.println("all services are functional!");
         executor.execute(this::CLI);
 
     }
+
     private void log(String message) {
         String timestamp = dateFormat.format(new Date());
         logs.add("[" + timestamp + "] " + message);
     }
 
-    private void CLI(){
+    private void CLI() {
         Scanner scanner = new Scanner(System.in);
-        try{
-            int counter =0;
-            while(true){
+        try {
+            System.out.println("Tracker ip :" + InetAddress.getLocalHost().getHostAddress());
+            int counter = 0;
+            while (true) {
                 counter = 0;
                 System.out.print("> ");
                 String command = scanner.nextLine();
-                if(command.equals("all-logs")){
-                    for(String x : logs)
+                if (command.equals("all-logs")) {
+                    for (String x : logs)
                         System.out.println(x);
 
-                }else if(command.startsWith("log requests ")){
+                } else if (command.startsWith("log requests ")) {
                     String[] info = command.split(" ");
-                    if(info.length > 2){
+                    if (info.length > 2) {
                         System.out.println("Error in command format!");
                         continue;
                     }
                     String keyword = info[1];
-                    for(String log : logs){
-                        if(log.contains(keyword)){
+                    for (String log : logs) {
+                        if (log.contains(keyword)) {
                             System.out.println(log);
                             counter++;
                         }
-                        if(counter == 0){
+                        if (counter == 0) {
                             System.out.println("No log with this IP");
                         }
                     }
-                }else if (command.startsWith("file_logs ")){
+                } else if (command.startsWith("file-logs ")) {
                     String[] info = command.split(" ");
-                    if(info.length > 2){
+                    if (info.length > 2) {
                         System.out.println("Error in command format!");
                         continue;
                     }
                     String keyword = info[1];
-                    for(String log : logs){
-                        if(log.contains(keyword)){
+                    for (String log : logs) {
+                        if (log.contains(keyword)) {
                             System.out.println(log);
                             counter++;
                         }
-                        if(counter == 0){
-                            System.out.println("No log with this FileName!");
-                        }
+                    }
+                    if (counter == 0) {
+                        System.out.println("No log with this FileName!");
                     }
 
-                }else{
+                } else {
 
                     System.out.println("Invalid command!");
                 }
-            
+
             }
 
-
-        }catch(Exception e){
+        } catch (Exception e) {
+            System.out.println("Interrupt detected , Ending Tracker process...");
+            executor.shutdownNow();
+            System.exit(0);
 
         }
-        
+
     }
 
-    private void listenForTrackers() {
-        try (ServerSocket serverSocket = new ServerSocket(TCP_PORT_FOR_OTHER_TRACKERS)) {
-            while (true) {
-                Socket socket = serverSocket.accept();
-                new Thread(() -> handleTrackerConnection(socket)).start();
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
+    /*
+     * private void listenForTrackers() {
+     * try (ServerSocket serverSocket = new
+     * ServerSocket(TCP_PORT_FOR_OTHER_TRACKERS)) {
+     * while (true) {
+     * Socket socket = serverSocket.accept();
+     * new Thread(() -> handleTrackerConnection(socket)).start();
+     * }
+     * } catch (IOException e) {
+     * e.printStackTrace();
+     * }
+     * }
+     */
 
     private void handleTrackerConnection(Socket socket) {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
@@ -201,43 +208,41 @@ public class Tracker {
             String message = new String(packet.getData(), 0, packet.getLength()).trim();
             InetAddress address = packet.getAddress();
             int port = packet.getPort();
-            
+
             int tempPort;
             String response;
-            log("got a peer packet : ip :" + address + " message: " + message);
+            log("Peer packet : ip :" + address + "\nmessage: " + message);
             peerLock.writeLock().lock();
             try {
                 if (message.startsWith("share") && message.length() > 6) {
                     String fileName = message.split(" ")[1];
                     int peerServerPort = Integer.parseInt(message.split(" ")[4]);
                     int peerPingPort = Integer.parseInt(message.split(" ")[5]);
-                    peers.computeIfAbsent(address.toString()+":"+peerServerPort,
-                            k -> new PeerInfo(address, port , peerServerPort , peerPingPort)).getSharedFiles()
-                            .add(fileName);
-                    response = "File shared successfully: " + fileName;
                     tempPort = Integer.parseInt(message.split(" ")[3]);
+                    peers.computeIfAbsent(address.toString() + ":" + peerServerPort,
+                            k -> new PeerInfo(address, port, peerServerPort, peerPingPort)).getSharedFiles()
+                            .put(fileName, tempPort);
+                    response = "File shared successfully: " + fileName;
 
                 } else if (message.startsWith("get") && message.length() > 4) {
-                    String fileName = message.substring(4).trim();
+                    String fileName = message.split(" ")[1];
                     response = getPeersWithFile(fileName);
                     tempPort = port;
-                }else if(message.startsWith("ack") && message.length() > 4){
+                } else if (message.startsWith("ack") && message.length() > 4) {
                     String[] info = message.split(" ");
-                    String senderKey = address.toString() +":"+ info[2];
+                    String senderKey = address.toString() + ":" + info[2];
                     tempPort = 8080;
-                    if(info[3].equals("success")){
+                    if (info[3].equals("success")) {
 
-                        peers.computeIfAbsent(senderKey, x ->new PeerInfo(address, port, Integer.parseInt(info[2]) ,Integer.parseInt(info[4])));
-                        peers.get(senderKey).sharedFiles.add(info[1]);
-                        response = senderKey + " successfully donwloaded " +info[1];
+                        peers.computeIfAbsent(senderKey,
+                                x -> new PeerInfo(address, port, Integer.parseInt(info[2]), Integer.parseInt(info[4])));
+                        peers.get(senderKey).sharedFiles.put(info[1], Integer.parseInt(info[3]));
+                        response = senderKey + " successfully donwloaded " + info[1];
                         log(senderKey + " successfully donwloaded " + info[1]);
-                    }else{
-                        response = senderKey + " couldn't download " +info[1];
+                    } else {
+                        response = senderKey + " couldn't download " + info[1];
                         log(senderKey + " couldn't download " + info[1]);
                     }
-
-
-
 
                 } else {
                     response = "Invalid command";
@@ -246,7 +251,6 @@ public class Tracker {
             } finally {
                 peerLock.writeLock().unlock();
             }
-            // Nisixixixi
             byte[] responseData = response.getBytes();
             DatagramPacket responsePacket = new DatagramPacket(responseData, responseData.length, address, tempPort);
             try (DatagramSocket socket = new DatagramSocket()) {
@@ -262,8 +266,8 @@ public class Tracker {
         try {
             List<String> peerList = new ArrayList<>();
             for (PeerInfo peer : peers.values()) {
-                if (peer.getSharedFiles().contains(fileName)) {
-                    peerList.add(peer.getIp().getHostAddress() + ":" + peer.getServerPort());
+                if (peer.getSharedFiles().keySet().contains(fileName)) {
+                    peerList.add(peer.getIp().getHostAddress() + ":" + peer.getSharedFiles().get(fileName));
                 }
             }
             if (!peerList.isEmpty()) {
@@ -271,7 +275,7 @@ public class Tracker {
                 return String.join(", ", peerList);
             }
 
-            String trackerResponse = requestFileFromOtherTrackers(fileName);
+            /*String trackerResponse = requestFileFromOtherTrackers(fileName);
             if (!trackerResponse.equals("File not found")) {
                 String[] trackerIps = trackerResponse.split(", ");
                 trackerLock.lock();
@@ -285,7 +289,7 @@ public class Tracker {
                     trackerLock.unlock();
                 }
                 return trackerResponse;
-            }
+            }*/
 
             return "File not found";
         } finally {
@@ -315,7 +319,8 @@ public class Tracker {
         while (true) {
             try {
                 Thread.sleep(PEER_CHECK_INTERVAL_MS);
-                //System.out.println("stareted checking health with " + peers.size() + " peers !");
+                // System.out.println("stareted checking health with " + peers.size() + " peers
+                // !");
                 List<String> toRemove = new ArrayList<>();
 
                 peerLock.readLock().lock();
@@ -336,9 +341,9 @@ public class Tracker {
                         builder.append(key);
                         peers.remove(key);
                     }
-                    log("dead peers : "+builder.toString());
+                    log("dead peers : " + builder.toString());
                     builder = new StringBuilder();
-                    for(String key:peers.keySet()){
+                    for (String key : peers.keySet()) {
                         builder.append(key + " ");
                     }
                     log("alive peers : " + builder.toString());
